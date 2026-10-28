@@ -1,0 +1,8 @@
+<!-- 托盘程序仅在显式 Shutdown 时退出；关闭日志窗口不应结束后台监测。 -->
+<Application x:Class="DesktopNarrator.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+    </Application.Resources>
+</Application>

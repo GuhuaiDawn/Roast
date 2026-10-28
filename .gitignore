@@ -1,0 +1,12 @@
+bin/
+obj/
+.dotnet/
+.dotnet-cli/
+.localappdata/
+.appdata/
+.vs/
+UpgradeLog.htm
+Backup/
+ActivityLog.xml
+ProjectActivityLog.xml
+SafeModeActivityLog.xml

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DesktopNarrator.Events\DesktopNarrator.Events.csproj" />
+    <ProjectReference Include="..\..\src\DesktopNarrator.Monitor\DesktopNarrator.Monitor.csproj" />
+    <ProjectReference Include="..\..\src\DesktopNarrator.App\DesktopNarrator.App.csproj" />
+  </ItemGroup>
+</Project>
