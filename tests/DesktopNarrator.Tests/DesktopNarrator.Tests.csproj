@@ -6,8 +6,10 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\DesktopNarrator.Analysis\DesktopNarrator.Analysis.csproj" />
     <ProjectReference Include="..\..\src\DesktopNarrator.Events\DesktopNarrator.Events.csproj" />
     <ProjectReference Include="..\..\src\DesktopNarrator.Monitor\DesktopNarrator.Monitor.csproj" />
     <ProjectReference Include="..\..\src\DesktopNarrator.App\DesktopNarrator.App.csproj" />
+    <ProjectReference Include="..\..\src\DesktopNarrator.Memory\DesktopNarrator.Memory.csproj" />
   </ItemGroup>
 </Project>

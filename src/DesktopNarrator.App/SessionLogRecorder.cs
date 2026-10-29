@@ -13,15 +13,17 @@ public sealed class SessionLogRecorder
     private readonly DeveloperLogStore _logStore;
     private readonly TimeProvider _clock;
     private readonly long _origin;
+    private readonly IActivityPersistence? _persistence;
     private bool _completed;
 
     /// <summary>默认使用系统单调计时；测试可注入可控时间，无需修改系统日期或生成输入。</summary>
-    public SessionLogRecorder(DeveloperLogStore logStore, TimeProvider? clock = null)
+    public SessionLogRecorder(DeveloperLogStore logStore, TimeProvider? clock = null, IActivityPersistence? persistence = null)
     {
         ArgumentNullException.ThrowIfNull(logStore);
         _logStore = logStore;
         _clock = clock ?? TimeProvider.System;
         _origin = _clock.GetTimestamp();
+        _persistence = persistence;
     }
 
     /// <summary>串行消费前台事件，记录应用切换、会话开始和会话结束；不访问界面控件。</summary>
@@ -40,6 +42,8 @@ public sealed class SessionLogRecorder
                 return;
             }
 
+            // 一次切换及其结束的会话作为同一个数据库事务单元，仅入队，不在此执行 I/O。
+            _persistence?.TryRecord(transition, ended);
             var previous = FormatApplication(transition.PreviousApplication);
             var current = FormatApplication(transition.CurrentApplication);
             _logStore.Append($"[{transition.Timestamp:HH:mm:ss}] ForegroundChanged: {previous} → {current}", LogCategory.Monitor);
@@ -62,6 +66,7 @@ public sealed class SessionLogRecorder
             if (_completed) return null;
             var ended = _builder.Complete(endedAt, _clock.GetElapsedTime(_origin));
             _completed = true;
+            if (ended is not null) _persistence?.TrySaveSession(ended);
             if (ended is not null) WriteCompleted(ended, "监测结束");
             _logStore.SetCurrentSession(null);
             return ended;

@@ -2,10 +2,10 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Desktop Narrator · Developer Log"
-        Width="760"
-        Height="480"
+        Width="1140"
+        Height="720"
         MinWidth="520"
-        MinHeight="300"
+        MinHeight="480"
         Background="#11151B"
         Foreground="#E7EDF5"
         WindowStartupLocation="CenterScreen">
@@ -18,20 +18,112 @@
         <StackPanel Margin="0,0,0,12">
             <TextBlock FontSize="22" FontWeight="SemiBold" Text="Developer Log" />
             <TextBlock Margin="0,4,0,0" Foreground="#9CA9B8"
-                       Text="Milestone 1–4 · 前台会话与空闲/返回事件 · 会话含无输入时段" />
+                       Text="Milestone 1–7 · 候选评分与过滤 · 尚未接入模型与通知" />
             <!-- 概要只随会话状态更新；不在 UI 层额外轮询前台窗口或累计活动时间。 -->
             <TextBlock x:Name="CurrentSessionText" Margin="0,8,0,0" Foreground="#B8D8F0"
                        TextWrapping="Wrap" Text="{Binding CurrentSessionSummary}" />
+            <TextBlock Margin="0,4,0,0" Foreground="#9CA9B8" TextWrapping="Wrap"
+                       Text="{Binding PersistenceSummary}" />
         </StackPanel>
 
-        <!-- 只绑定日志集合；滚动在代码侧延后调度，避免集合变更期间触发布局重入。 -->
-        <ListBox x:Name="LogList"
-                 Grid.Row="1"
+        <TabControl x:Name="LogTabs" Grid.Row="1" SelectionChanged="OnHistorySelected">
+            <TabItem Header="实时日志（本次运行）">
+                <!-- 只绑定日志集合；滚动在代码侧延后调度，避免集合变更期间触发布局重入。 -->
+                <ListBox x:Name="LogList"
                  Background="#171D25"
                  BorderBrush="#2C3745"
                  Foreground="#DDE6F0"
                  FontFamily="Cascadia Mono, Consolas"
                  FontSize="13"
                  ItemsSource="{Binding Entries}" />
+            </TabItem>
+            <TabItem x:Name="PatternsTab" Header="模式候选（本次运行）">
+                <Grid Background="#171D25" Margin="0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Margin="8">
+                        <TextBlock Foreground="#DDE6F0" TextWrapping="Wrap" Text="{Binding EvaluationSummary}" />
+                        <TextBlock Margin="0,4,0,0" Foreground="#B8D8F0" TextWrapping="Wrap"
+                                   Text="最近 200 个候选（含被过滤项）· 分数 / 阈值不是概率 · 点击一行查看事实与评分原因。存储状态见上方。" />
+                        <TextBlock Foreground="#B8D8F0" Margin="0,4,0,0" Text="尚未产生候选；达到模式阈值后才会出现记录。">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Patterns.Count}" Value="0"><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                    <DataGrid x:Name="PatternList" Grid.Row="1" Margin="8" ItemsSource="{Binding Patterns}"
+                              IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                              Background="#EFF3F8" Foreground="#17212D">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="发现时间" Binding="{Binding EndTime, StringFormat=HH:mm:ss}" Width="80" />
+                            <DataGridTextColumn Header="规则" Binding="{Binding Type}" Width="145" />
+                            <DataGridTextColumn Header="分数 / 阈值" Binding="{Binding ScoreText}" Width="100" />
+                            <DataGridTextColumn Header="初筛结果" Binding="{Binding DecisionText}" Width="155" />
+                            <DataGridTextColumn Header="事实（不是旁白）" Binding="{Binding Summary}" Width="*" MinWidth="240" />
+                            <DataGridTextColumn Header="判定原因" Binding="{Binding ReasonText}" Width="260" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TabControl Grid.Row="2" Margin="8" Height="175">
+                        <TabItem Header="结构化事实">
+                            <TextBox x:Name="PatternEvidence" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                     Text="{Binding SelectedItem.EvidenceJson, ElementName=PatternList, Mode=OneWay}" />
+                        </TabItem>
+                        <TabItem x:Name="ScoreDetailsTab" Header="评分与过滤原因（评估时快照）">
+                            <TextBox x:Name="PatternEvaluationDetail" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                     Text="{Binding SelectedItem.EvaluationDetails, ElementName=PatternList, Mode=OneWay}" />
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </TabItem>
+            <TabItem x:Name="HistoryTab" Header="已保存历史">
+                <Grid Background="#171D25" Margin="0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="2*" />
+                    </Grid.RowDefinitions>
+                    <WrapPanel Margin="8">
+                        <TextBlock Text="日期：" VerticalAlignment="Center" Foreground="#DDE6F0" />
+                        <DatePicker x:Name="HistoryDate" Width="145" SelectedDateChanged="OnHistoryDateChanged" />
+                        <Button x:Name="RefreshHistoryButton" Content="刷新" Click="OnRefreshHistory" Margin="8,0" Padding="10,2" />
+                        <Button x:Name="PreviousHistoryButton" Content="上一页" Click="OnPreviousHistory" Padding="10,2" />
+                        <Button x:Name="NextHistoryButton" Content="下一页" Click="OnNextHistory" Margin="8,0" Padding="10,2" />
+                    </WrapPanel>
+                    <TextBlock x:Name="HistoryStatus" Grid.Row="1" Margin="8,0,8,8" TextWrapping="Wrap" Foreground="#B8D8F0"
+                               Text="仅统计已结束且写入成功的会话；当前会话结束后才加入历史。" />
+                    <TextBlock Grid.Row="2" Margin="8,0,8,4" Foreground="#DDE6F0" Text="当日前台总时长（跨天按当日部分计算，包含无输入时段）" />
+                    <DataGrid x:Name="DailyTotalsGrid" Grid.Row="3" Margin="8,0,8,8" IsReadOnly="True" AutoGenerateColumns="False"
+                              CanUserAddRows="False" CanUserDeleteRows="False" Background="#EFF3F8" Foreground="#17212D">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="进程" Binding="{Binding ProcessName}" Width="150" />
+                            <DataGridTextColumn Header="应用" Binding="{Binding FriendlyName}" Width="*" />
+                            <DataGridTextColumn Header="当日前台时长" Binding="{Binding DurationText}" Width="180" />
+                            <DataGridTextColumn Header="相交会话数" Binding="{Binding SessionCount}" Width="100" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock Grid.Row="4" Margin="8,0,8,4" Foreground="#DDE6F0" Text="会话历史（每页 100 条；时长是整段会话时长）" />
+                    <DataGrid x:Name="SessionHistoryGrid" Grid.Row="5" Margin="8,0,8,8" IsReadOnly="True" AutoGenerateColumns="False"
+                              CanUserAddRows="False" CanUserDeleteRows="False" Background="#EFF3F8" Foreground="#17212D">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="进程" Binding="{Binding ProcessName}" Width="130" />
+                            <DataGridTextColumn Header="开始（原始时间）" Binding="{Binding StartTime, StringFormat=yyyy-MM-dd HH:mm:ss zzz}" Width="220" />
+                            <DataGridTextColumn Header="结束（原始时间）" Binding="{Binding EndTime, StringFormat=yyyy-MM-dd HH:mm:ss zzz}" Width="220" />
+                            <DataGridTextColumn Header="完整前台时长" Binding="{Binding Duration}" Width="170" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+        </TabControl>
     </Grid>
 </Window>

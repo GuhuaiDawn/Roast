@@ -11,6 +11,8 @@ public enum LogCategory
     System,
     Monitor,
     Session,
+    Pattern,
+    Interestingness,
     Error
 }
 
@@ -22,7 +24,11 @@ public sealed class DeveloperLogStore : INotifyPropertyChanged
 {
     private readonly Dispatcher _dispatcher;
     private readonly ObservableCollection<string> _entries = new();
+    private readonly ObservableCollection<PatternReview> _patterns = new();
+    private long _evaluatedCount;
+    private long _selectedCount;
     private string _currentSessionSummary = "当前会话：等待首次前台事件";
+    private string _persistenceSummary = "持久化：未配置";
 
     /// <summary>属性变化和集合变化一样，始终在日志存储所属的 UI 线程通知。</summary>
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -30,15 +36,45 @@ public sealed class DeveloperLogStore : INotifyPropertyChanged
     /// <summary>当前应用和开始时间；不每秒写日志，结束时才输出最终时长。</summary>
     public string CurrentSessionSummary => _currentSessionSummary;
 
+    /// <summary>数据库状态与当前会话分开展示，避免把内存日志误认为已经落盘。</summary>
+    public string PersistenceSummary => _persistenceSummary;
+
+    /// <summary>本次运行累计初筛数量；不是发送次数，也不是数据库提交确认。</summary>
+    public string EvaluationSummary => $"本次已评估 {_evaluatedCount} 个 · 通过初筛 {_selectedCount} 个 · 过滤 {_evaluatedCount - _selectedCount} 个 · 尚未发送旁白";
+
     public DeveloperLogStore()
     {
         // 必须在 UI 线程构造以捕获正确的 Dispatcher；之后允许任意线程提交日志。
         _dispatcher = Dispatcher.CurrentDispatcher;
         Entries = new ReadOnlyObservableCollection<string>(_entries);
+        Patterns = new ReadOnlyObservableCollection<PatternReview>(_patterns);
     }
 
     /// <summary>仅用于 UI 绑定和观察；禁止外部绕过 Append 直接修改集合。</summary>
     public ReadOnlyObservableCollection<string> Entries { get; }
+
+    /// <summary>本次运行最近 200 个候选；完整已接受历史由 SQLite 保存，界面列表不是持久化确认。</summary>
+    public ReadOnlyObservableCollection<PatternReview> Patterns { get; }
+
+    /// <summary>沿用日志的异步 UI 调度，避免候选列表重现跨线程或集合通知重入问题。</summary>
+    public void AppendPattern(DetectedPattern pattern, PatternEvaluation? evaluation = null)
+    {
+        var row = new PatternReview(pattern, evaluation);
+        Append($"[{pattern.EndTime:HH:mm:ss}] {pattern.Type}: {pattern.Summary}", LogCategory.Pattern);
+        if (evaluation is not null) Append($"{pattern.Type} · {row.ScoreText} · {row.DecisionText} · {row.ReasonText}", LogCategory.Interestingness);
+        if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished) return;
+        _dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _patterns.Insert(0, row);
+            while (_patterns.Count > 200) _patterns.RemoveAt(_patterns.Count - 1);
+            if (evaluation is not null)
+            {
+                _evaluatedCount++;
+                if (evaluation.IsSelected) _selectedCount++;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EvaluationSummary)));
+            }
+        }));
+    }
 
     /// <summary>异步排队追加日志，返回时不保证已显示；调度器关闭后丢弃晚到的日志。</summary>
     public void Append(string message, LogCategory category)
@@ -61,6 +97,17 @@ public sealed class DeveloperLogStore : INotifyPropertyChanged
             if (_currentSessionSummary == summary) return;
             _currentSessionSummary = summary;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CurrentSessionSummary)));
+        }));
+    }
+
+    /// <summary>写入线程只提交状态文本，由 UI 调度器通知绑定。</summary>
+    public void SetPersistenceStatus(string message)
+    {
+        if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished) return;
+        _dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _persistenceSummary = message;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PersistenceSummary)));
         }));
     }
 }

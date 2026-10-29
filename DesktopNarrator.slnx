@@ -1,6 +1,8 @@
 <Solution>
+  <Project Path="src/DesktopNarrator.Analysis/DesktopNarrator.Analysis.csproj" />
   <Project Path="src/DesktopNarrator.App/DesktopNarrator.App.csproj" />
   <Project Path="src/DesktopNarrator.Events/DesktopNarrator.Events.csproj" />
   <Project Path="src/DesktopNarrator.Monitor/DesktopNarrator.Monitor.csproj" />
+  <Project Path="src/DesktopNarrator.Memory/DesktopNarrator.Memory.csproj" />
   <Project Path="tests/DesktopNarrator.Tests/DesktopNarrator.Tests.csproj" />
 </Solution>

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DesktopNarrator.Events\DesktopNarrator.Events.csproj" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.33" />
+  </ItemGroup>
+</Project>

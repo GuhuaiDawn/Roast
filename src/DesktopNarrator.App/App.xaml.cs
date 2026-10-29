@@ -1,6 +1,7 @@
 using System.Windows;
 using DesktopNarrator.Events;
 using DesktopNarrator.Monitor;
+using DesktopNarrator.Memory;
 
 namespace DesktopNarrator.App;
 
@@ -12,6 +13,10 @@ public partial class App : Application
 {
     private readonly DeveloperLogStore _logStore = new();
     private SessionLogRecorder? _sessionLog;
+    private PatternLogRecorder? _patterns;
+    private ProcessMonitor? _processMonitor;
+    private ActivityPersistence? _persistence;
+    private HistoryQueryService? _historyQueries;
     private ForegroundMonitor? _foregroundMonitor;
     private IIdleMonitor? _idleMonitor;
     private TimeSpan _idleThreshold = TimeSpan.FromMinutes(5);
@@ -25,7 +30,18 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        _sessionLog = new SessionLogRecorder(_logStore);
+        // 构造仓储不访问磁盘；初始化和全部写入都由后台队列执行，故障不阻止监测启动。
+        var database = new SqliteActivityStore(SqliteActivityStore.DefaultDatabasePath);
+        _persistence = new ActivityPersistence(database);
+        _persistence.StatusChanged += OnPersistenceStatus;
+        _historyQueries = new HistoryQueryService(database, _persistence);
+        _persistence.Start();
+        _sessionLog = new SessionLogRecorder(_logStore, persistence: _persistence);
+        _patterns = new PatternLogRecorder(_logStore, _persistence);
+        _patterns.Start();
+        _logStore.Append("初筛 rules-v1：阈值 75 分；候选通过间隔 20 分钟，同主题 3 小时；过滤辅助进程、缺少前台关联的启动候选及空闲/快速切换场景。只保留本次运行评分上下文，不等于已发送旁白。", LogCategory.System);
+        _logStore.Append("模式规则：前台 ≥90 分钟；5 分钟内 ≥25 次切换；关闭后 ≤10 分钟重开；无输入 ≥30 分钟后返回；本次监测当日启动 ≥6 次。仅记录候选，不生成旁白。", LogCategory.System);
+        _logStore.Append($"本地数据库：{database.DatabasePath}（仅保存进程身份与时间，不上传）", LogCategory.System);
 
         // 临时缩短验收等待时间，不写入配置；非法参数回退到默认 300 秒并留下诊断。
         var thresholdArgument = Array.IndexOf(e.Args, "--idle-seconds");
@@ -55,6 +71,7 @@ public partial class App : Application
     {
         try
         {
+            _processMonitor?.Dispose();
             _idleMonitor?.Dispose();
             _foregroundMonitor?.Dispose();
         }
@@ -63,13 +80,17 @@ public partial class App : Application
             // 先停止生产者，再结束最后会话；即使停止监测失败也尝试收尾。
             // 适配器会拒绝之后晚到的事件，避免退出期间重新打开一段会话。
             _sessionLog?.Complete(DateTimeOffset.Now);
+            _patterns?.Dispose();
+            // 最后一段会话入队后再排空。超时明确报出，不能把未写数据当成已保存。
+            if (_persistence is not null && !_persistence.Shutdown(TimeSpan.FromSeconds(5)))
+                System.Diagnostics.Trace.TraceError($"数据库退出未完全保存：待写 {_persistence.PendingCount}，拒绝 {_persistence.RejectedCount}");
             _trayIcon?.Dispose();
             _trayHost?.Close();
             base.OnExit(e);
         }
     }
 
-    /// <summary>HWND 创建后注册托盘回调，连接并启动两类监测器。</summary>
+    /// <summary>HWND 创建后注册托盘回调，分别启动前台、空闲和进程监测器。</summary>
     private void OnTrayHostInitialized(object? sender, EventArgs e)
     {
         if (_trayHost is null)
@@ -108,11 +129,25 @@ public partial class App : Application
         {
             _logStore.Append($"Idle monitor startup error: {exception.Message}", LogCategory.Error);
         }
+
+        try
+        {
+            _processMonitor = new ProcessMonitor();
+            _processMonitor.Changed += OnProcessChanged;
+            _processMonitor.Error += OnMonitorError;
+            _processMonitor.Start();
+        }
+        catch (Exception exception)
+        {
+            _logStore.Append($"Process monitor startup error: {exception.Message}", LogCategory.Error);
+        }
     }
 
     /// <summary>记录检测时间与估计的最后输入时间，两者之间通常包含整个空闲阈值。</summary>
     private void OnUserIdle(object? sender, UserIdleEvent eventData)
     {
+        _persistence?.TryRecord(eventData);
+        _patterns?.Record(eventData);
         if (Dispatcher.HasShutdownStarted) return;
         Dispatcher.BeginInvoke(() => _logStore.Append(
             $"[{eventData.DetectedAt:HH:mm:ss}] UserIdle: 最后输入 {eventData.IdleStartedAt:yyyy-MM-dd HH:mm:ss}",
@@ -122,6 +157,8 @@ public partial class App : Application
     /// <summary>显示完整无输入时长，而不是从 UserIdle 事件发出之后才开始计时。</summary>
     private void OnUserReturned(object? sender, UserReturnedEvent eventData)
     {
+        _persistence?.TryRecord(eventData);
+        _patterns?.Record(eventData);
         if (Dispatcher.HasShutdownStarted) return;
         Dispatcher.BeginInvoke(() => _logStore.Append(
             $"[{eventData.DetectedAt:HH:mm:ss}] UserReturned: 返回 {eventData.ReturnedAt:HH:mm:ss}，IdleDuration={eventData.IdleDuration:c}",
@@ -132,6 +169,21 @@ public partial class App : Application
     private void OnForegroundChanged(object? sender, ForegroundChangedEvent eventData)
     {
         _sessionLog?.Record(eventData);
+        _patterns?.Record(eventData);
+    }
+
+    /// <summary>只记录进程组变化；初始化/故障恢复标记明确说明观察缺口，不把它当作应用启动。</summary>
+    private void OnProcessChanged(object? sender, IMonitorEvent eventData)
+    {
+        _persistence?.TryRecord(eventData);
+        _patterns?.Record(eventData);
+        var text = eventData switch
+        {
+            AppStartedEvent started => $"AppStarted: {started.ProcessName}（快照发现进程组出现）",
+            AppClosedEvent closed => $"AppClosed: {closed.ProcessName}（快照发现同名进程全部消失）",
+            _ => "ProcessObservationReset: 重建基线，重开/启动次数重新观察"
+        };
+        _logStore.Append($"[{eventData.Timestamp:HH:mm:ss}] {text}", LogCategory.Monitor);
     }
 
     /// <summary>可恢复的监测错误写入开发日志，不向用户弹出打扰性通知。</summary>
@@ -189,12 +241,23 @@ public partial class App : Application
     {
         if (_developerLogWindow is null)
         {
-            _developerLogWindow = new DeveloperLogWindow(_logStore);
+            _developerLogWindow = new DeveloperLogWindow(_logStore, _historyQueries);
             _developerLogWindow.Closed += (_, _) => _developerLogWindow = null;
         }
 
         _developerLogWindow.Show();
         _developerLogWindow.Activate();
+    }
+
+    /// <summary>持久化状态不走数据库本身，避免数据库故障引发递归记录；后台线程不碰 UI。</summary>
+    private void OnPersistenceStatus(object? sender, PersistenceStatus status)
+    {
+        _logStore.SetPersistenceStatus(status.Message);
+        if (!status.Healthy)
+        {
+            _logStore.Append(status.Message, LogCategory.Error);
+            System.Diagnostics.Trace.TraceError(status.Message);
+        }
     }
 
     private void OnDispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)

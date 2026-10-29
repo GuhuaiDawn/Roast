@@ -1,6 +1,9 @@
 using DesktopNarrator.Events;
 using DesktopNarrator.Monitor;
 
+// 隐藏原生进程夹具：只等待父测试关闭标准输入，不启动监测、数据库或界面。
+if (args.Contains("--process-fixture")) { Console.ReadLine(); return 0; }
+
 // 无第三方测试框架的回归入口：既测试纯状态逻辑，也包含需要 Windows 桌面会话的原生/WPF 测试。
 var tests = new (string Name, Action Body)[]
 {
@@ -33,7 +36,54 @@ var tests = new (string Name, Action Body)[]
     ("Session supports zero duration and fractional seconds", AppSessionTests.PrecisionAndFallback),
     ("Log session pipeline finishes before UI queue drains", DeveloperLogTests.SessionPipeline),
     ("Log current session survives window reopening", DeveloperLogTests.SessionView),
-    ("Session native foreground pipeline can be finalized", DeveloperLogTests.NativeSessionPipeline)
+    ("Session native foreground pipeline can be finalized", DeveloperLogTests.NativeSessionPipeline),
+    ("Memory survives reopen with exact values", MemoryTests.RoundTrip),
+    ("Memory retries are idempotent", MemoryTests.Idempotency),
+    ("Memory transactions roll back the entire batch", MemoryTests.AtomicRollback),
+    ("Memory splits sessions at local midnight", MemoryTests.CrossMidnight),
+    ("Memory respects daylight saving day lengths", MemoryTests.DaylightSaving),
+    ("Memory preserves monotonic duration after clock changes", MemoryTests.ClockAdjustment),
+    ("Memory paginates history without truncating totals", MemoryTests.Pagination),
+    ("Memory preserves unsupported and corrupt databases", MemoryTests.PreserveUnknownDatabase),
+    ("Memory retries after a database lock is released", MemoryTests.LockedDatabaseRecovery),
+    ("Memory recovers from unavailable initialization path", MemoryTests.InitializationRecovery),
+    ("Memory has bounded queues and shutdown waiting", MemoryTests.QueueAndShutdownLimits),
+    ("Memory event records follow the privacy whitelist", MemoryTests.EventPrivacy),
+    ("Log session pipeline persists across restart", DeveloperLogTests.PersistedSessionPipeline),
+    ("Log saved history supports dates and pagination", DeveloperLogTests.PersistedHistoryView),
+    ("Pattern long session thresholds and deduplication", PatternTests.LongSession),
+    ("Pattern long session on switch and clock adjustment", PatternTests.LongSessionOnSwitchAndClockChange),
+    ("Pattern rapid switching counts and episodes", PatternTests.RapidSwitching),
+    ("Pattern switching window boundaries and burst bound", PatternTests.SwitchWindowBoundary),
+    ("Pattern reopen boundaries and duplicate lifecycle", PatternTests.ReopenBoundaryAndDeduplication),
+    ("Pattern repeated open daily threshold and date reset", PatternTests.RepeatedOpenAndDateReset),
+    ("Pattern lifecycle observation gap resets evidence", PatternTests.ObservationGap),
+    ("Pattern long idle and invalid input", PatternTests.LongIdleAndValidation),
+    ("Pattern deterministic replay", PatternTests.DeterministicReplay),
+    ("Process baseline and multi-process groups", ProcessTests.BaselineAndGroups),
+    ("Process observation gaps and reset", ProcessTests.GapsAndReset),
+    ("Process recovery lifecycle and subscriber isolation", ProcessTests.RecoveryAndSubscriberIsolation),
+    ("Process native session snapshot", ProcessTests.NativeSnapshot),
+    ("Process native start and close of controlled child", ProcessTests.NativeLifecycle),
+    ("Memory upgrades v1 database without changing history", MemoryTests.PatternSchemaMigration),
+    ("Memory persists pattern evidence and lifecycle events", MemoryTests.PatternPersistence),
+    ("Memory rolls back invalid pattern batches", MemoryTests.PatternAtomicRollback),
+    ("Log pattern pipeline and bounded candidate view", DeveloperLogTests.PatternPipelineAndView),
+    ("Scoring weighted components and threshold boundary", InterestingnessTests.WeightedScoreAndThreshold),
+    ("Scoring background tools and self are filtered", InterestingnessTests.BackgroundAndSelf),
+    ("Scoring lifecycle requires recent foreground association", InterestingnessTests.ForegroundAssociation),
+    ("Scoring idle and rapid-switch contexts", InterestingnessTests.IdleAndRapidContext),
+    ("Scoring global cooldown ignores wall-clock changes", InterestingnessTests.GlobalCooldownAndClockRollback),
+    ("Scoring topic cooldown novelty and repetition", InterestingnessTests.TopicCooldownAndNovelty),
+    ("Scoring ranks a batch and deduplicates candidate IDs", InterestingnessTests.RankingAndIdempotency),
+    ("Scoring invalid evidence and options fail safely", InterestingnessTests.InvalidEvidenceAndOptions),
+    ("Scoring observation reset does not bypass cooldown", InterestingnessTests.ResetDoesNotCancelCooldown),
+    ("Scoring noise pressure preserves selected topic", InterestingnessTests.NoisePressurePreservesSelectedTopic),
+    ("Scoring mixed timeline replay filters most candidates", InterestingnessTests.MixedReplay),
+    ("Memory upgrades v2 without fabricating historical scores", MemoryTests.EvaluationSchemaMigration),
+    ("Memory preserves passed and filtered scoring snapshots", MemoryTests.EvaluationRoundTrip),
+    ("Memory scoring and candidates commit atomically", MemoryTests.EvaluationAtomicity),
+    ("Log scoring pipeline reasons and decision view", DeveloperLogTests.ScoringPipelineAndView)
 };
 
 var failed = 0;
@@ -41,6 +91,10 @@ foreach (var test in tests)
 {
     // 仅调试日志界面时可跳过系统监测测试；筛选依赖下方测试名称的 Log 前缀约定。
     if (args.Contains("--log-ui-only") && !test.Name.StartsWith("Log ", StringComparison.Ordinal)) continue;
+    if (args.Contains("--memory-only") && !test.Name.StartsWith("Memory ", StringComparison.Ordinal)) continue;
+    if (args.Contains("--analysis-only") && !test.Name.StartsWith("Pattern ", StringComparison.Ordinal)) continue;
+    if (args.Contains("--process-only") && !test.Name.StartsWith("Process ", StringComparison.Ordinal)) continue;
+    if (args.Contains("--scoring-only") && !test.Name.StartsWith("Scoring ", StringComparison.Ordinal)) continue;
     try
     {
         test.Body();

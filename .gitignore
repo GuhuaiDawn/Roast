@@ -10,3 +10,6 @@ Backup/
 ActivityLog.xml
 ProjectActivityLog.xml
 SafeModeActivityLog.xml
+*.db
+*.db-wal
+*.db-shm
