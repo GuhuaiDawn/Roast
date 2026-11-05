@@ -13,3 +13,4 @@ SafeModeActivityLog.xml
 *.db
 *.db-wal
 *.db-shm
+artifacts/ui-preview/

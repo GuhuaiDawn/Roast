@@ -215,7 +215,7 @@ public partial class App : Application
                     LogCategory.System);
             };
 
-            var logItem = new System.Windows.Controls.MenuItem { Header = "打开 Developer Log" };
+            var logItem = new System.Windows.Controls.MenuItem { Header = "打开桌面足迹" };
             logItem.Click += (_, _) => ShowDeveloperLog();
 
             var settingsItem = new System.Windows.Controls.MenuItem
@@ -252,7 +252,7 @@ public partial class App : Application
     /// <summary>持久化状态不走数据库本身，避免数据库故障引发递归记录；后台线程不碰 UI。</summary>
     private void OnPersistenceStatus(object? sender, PersistenceStatus status)
     {
-        _logStore.SetPersistenceStatus(status.Message);
+        _logStore.SetPersistenceStatus(status.Message, status.Healthy);
         if (!status.Healthy)
         {
             _logStore.Append(status.Message, LogCategory.Error);

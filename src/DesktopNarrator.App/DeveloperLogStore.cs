@@ -27,8 +27,9 @@ public sealed class DeveloperLogStore : INotifyPropertyChanged
     private readonly ObservableCollection<PatternReview> _patterns = new();
     private long _evaluatedCount;
     private long _selectedCount;
-    private string _currentSessionSummary = "当前会话：等待首次前台事件";
+    private string _currentSessionSummary = "等待首次前台记录";
     private string _persistenceSummary = "持久化：未配置";
+    private string _persistenceWarning = "";
 
     /// <summary>属性变化和集合变化一样，始终在日志存储所属的 UI 线程通知。</summary>
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -38,6 +39,9 @@ public sealed class DeveloperLogStore : INotifyPropertyChanged
 
     /// <summary>数据库状态与当前会话分开展示，避免把内存日志误认为已经落盘。</summary>
     public string PersistenceSummary => _persistenceSummary;
+
+    /// <summary>概览只显示异常；健康状态和队列计数仍保留在开发日志，不常驻占用主界面。</summary>
+    public string PersistenceWarning => _persistenceWarning;
 
     /// <summary>本次运行累计初筛数量；不是发送次数，也不是数据库提交确认。</summary>
     public string EvaluationSummary => $"本次已评估 {_evaluatedCount} 个 · 通过初筛 {_selectedCount} 个 · 过滤 {_evaluatedCount - _selectedCount} 个 · 尚未发送旁白";
@@ -90,8 +94,8 @@ public sealed class DeveloperLogStore : INotifyPropertyChanged
     public void SetCurrentSession(AppSession? session)
     {
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished) return;
-        var summary = session is null ? "当前会话：监测已结束" :
-            $"当前会话：{session.ProcessName} [{session.FriendlyName}] · 开始 {session.StartTime:yyyy-MM-dd HH:mm:ss}";
+        var summary = session is null ? "监测已结束" :
+            $"{ActivityPresentation.AppName(session.ProcessName, session.FriendlyName)} · 自 {session.StartTime:MM-dd HH:mm:ss} 起在前台";
         _dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
             if (_currentSessionSummary == summary) return;
@@ -101,13 +105,15 @@ public sealed class DeveloperLogStore : INotifyPropertyChanged
     }
 
     /// <summary>写入线程只提交状态文本，由 UI 调度器通知绑定。</summary>
-    public void SetPersistenceStatus(string message)
+    public void SetPersistenceStatus(string message, bool healthy = true)
     {
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished) return;
         _dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
             _persistenceSummary = message;
+            _persistenceWarning = healthy ? "" : message;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PersistenceSummary)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PersistenceWarning)));
         }));
     }
 }

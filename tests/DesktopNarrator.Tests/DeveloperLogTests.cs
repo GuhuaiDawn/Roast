@@ -1,8 +1,11 @@
 using System.Collections.Specialized;
+using System.IO;
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using DesktopNarrator.App;
 using DesktopNarrator.Monitor;
 using DesktopNarrator.Memory;
@@ -28,6 +31,7 @@ internal static class DeveloperLogTests
             try
             {
                 window.Show();
+                ((TabItem)window.FindName("DebugTab")).IsSelected = true;
                 DrainDispatcher();
                 var list = (ListBox)window.FindName("LogList");
                 for (var i = 0; i < 100; i++)
@@ -233,11 +237,15 @@ internal static class DeveloperLogTests
             date.SelectedDate = MemoryTests.Day.ToDateTime(TimeOnly.MinValue);
             tab.IsSelected = true;
             PumpUntil(() => refresh.IsEnabled && rows.Items.Count == 100);
-            Check(((DailyAppTotal)totals.Items[0]).TotalForegroundSeconds == 105, "UI total truncated to page");
+            Check(((AppUsageSlice)totals.Items[0]).Seconds == 105, "UI distribution truncated to page");
+            Check(window.Overview?.TotalSeconds == 105 && window.Overview.SessionCount == 105, "Overview cards used only a page");
+            Check(((TextBlock)window.FindName("TotalDurationText")).Text == "1 分钟 45 秒", "Readable duration card not bound");
             ((Button)window.FindName("NextHistoryButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             PumpUntil(() => refresh.IsEnabled && rows.Items.Count == 5);
+            Check(window.Overview?.TotalSeconds == 105, "Pagination changed the all-day overview");
             date.SelectedDate = MemoryTests.Day.AddDays(1).ToDateTime(TimeOnly.MinValue);
             PumpUntil(() => refresh.IsEnabled && rows.Items.Count == 0);
+            Check(window.Overview?.TotalSeconds == 0 && ((FrameworkElement)window.FindName("HistoryEmptyState")).IsVisible, "Empty day not distinguished from read failure");
             // 连续切换日期使旧任务作废；最终页面不能被慢查询覆盖。
             date.SelectedDate = MemoryTests.Day.AddDays(2).ToDateTime(TimeOnly.MinValue);
             date.SelectedDate = MemoryTests.Day.ToDateTime(TimeOnly.MinValue);
@@ -295,6 +303,7 @@ internal static class DeveloperLogTests
                 var list = (DataGrid)window.FindName("PatternList");
                 Check(list.Items.Count == log.Patterns.Count, "Candidate view lost records on reopen");
                 list.SelectedIndex = 0;
+                ((TabItem)window.FindName("EvidenceTab")).IsSelected = true;
                 DrainDispatcher();
                 Check(((TextBox)window.FindName("PatternEvidence")).Text.Contains("DurationSeconds"), "Selected evidence not bound");
                 if (cycle == 0)
@@ -363,6 +372,151 @@ internal static class DeveloperLogTests
         finally { window.Close(); }
         DrainDispatcher();
     });
+
+    /// <summary>读取失败不能显示为零活动；恢复数据库后可以刷新，不污染真实用户历史。</summary>
+    public static void OverviewReadFailure() => OnSta(() =>
+    {
+        using var files = new MemoryTests.TestDatabase();
+        // 文件存在但未建表，模拟历史不可用；此操作只针对隔离夹具。
+        using (var connection = files.Open()) { }
+        var window = HiddenWindow(new DeveloperLogStore(), new HistoryQueryService(files.Store));
+        try
+        {
+            window.Show();
+            var refresh = (Button)window.FindName("RefreshHistoryButton");
+            PumpUntil(() => refresh.IsEnabled);
+            Check(window.Overview is null && ((TextBlock)window.FindName("HistoryStatus")).Text.Contains("无法读取"), "Read error masquerades as empty day");
+            Check(!((FrameworkElement)window.FindName("HistoryEmptyState")).IsVisible, "Error showed empty-day message");
+            files.Store.Initialize();
+            refresh.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            PumpUntil(() => refresh.IsEnabled && window.Overview is not null);
+            Check(window.Overview?.SessionCount == 0, "Refresh did not recover");
+        }
+        finally { window.Close(); }
+        DrainDispatcher();
+    });
+
+    /// <summary>今日首页的低频刷新只读取已提交结果；关窗后不再持有活动计时器。</summary>
+    public static void OverviewRefresh() => OnSta(() =>
+    {
+        using var files = new MemoryTests.TestDatabase();
+        files.Store.Initialize();
+        var now = DateTimeOffset.Now;
+        files.Store.WriteBatch([new(null, MemoryTests.Session("Code", 60, now))]);
+        var window = HiddenWindow(new DeveloperLogStore(), new HistoryQueryService(files.Store));
+        try
+        {
+            window.Show();
+            PumpUntil(() => window.Overview?.SessionCount == 1);
+            files.Store.WriteBatch([new(null, MemoryTests.Session("Chrome", 30, now))]);
+            PumpUntil(() => window.Overview?.SessionCount == 2);
+            Check(window.Overview?.TotalSeconds == 90, "Automatic refresh changed persisted totals");
+        }
+        finally { window.Close(); }
+        DrainDispatcher();
+    });
+
+    /// <summary>正常概览没有常驻诊断；故障仍可见。扇图与图例一致，时间文本明显大于应用名称。</summary>
+    public static void CleanOverviewAndPie() => OnSta(() =>
+    {
+        using var files = new MemoryTests.TestDatabase();
+        files.Store.Initialize();
+        files.Store.WriteBatch([new(null, MemoryTests.Session("Code", 5400)), new(null, MemoryTests.Session("Chrome", 2400)), new(null, MemoryTests.Session("QQ", 1200))]);
+        var log = new DeveloperLogStore();
+        log.SetPersistenceStatus("数据库可用 · 待写 0 项");
+        var window = HiddenWindow(log, new HistoryQueryService(files.Store));
+        try
+        {
+            window.Show();
+            ((DatePicker)window.FindName("HistoryDate")).SelectedDate = MemoryTests.Start.LocalDateTime.Date;
+            PumpUntil(() => window.Overview?.SessionCount == 3);
+            DrainDispatcher();
+            var historyNotice = (TextBlock)window.FindName("HistoryStatus");
+            var writeNotice = (TextBlock)window.FindName("PersistenceNotice");
+            Check(!historyNotice.IsVisible && !writeNotice.IsVisible, "Normal overview still shows status explanations");
+            var pie = (ApplicationPieChart)window.FindName("UsagePie");
+            Check(pie.Slices.Count == 3 && ReferenceEquals(pie.Slices, window.Distribution), "Pie and legend use different snapshots");
+            var rows = (DataGrid)window.FindName("SessionHistoryGrid");
+            rows.UpdateLayout();
+            var labels = Descendants(rows).OfType<TextBlock>().ToArray();
+            Check(labels.Any(x => x.Name == "SessionTimeRange" && x.FontSize >= 18 && x.FontWeight == FontWeights.SemiBold), "Session times remain secondary text");
+            Check(labels.Any(x => x.Name == "SessionDuration" && x.FontSize >= 18), "Duration not emphasized");
+            log.SetPersistenceStatus("数据库暂不可用", healthy: false);
+            DrainDispatcher();
+            Check(writeNotice.IsVisible && writeNotice.Text.Contains("暂不可用"), "Failure hidden with normal diagnostics");
+            log.SetPersistenceStatus("数据库已恢复", healthy: true);
+            DrainDispatcher();
+            Check(!writeNotice.IsVisible && log.PersistenceSummary == "数据库已恢复", "Recovery failed to clear warning/preserve diagnostics");
+        }
+        finally { window.Close(); }
+        DrainDispatcher();
+    });
+
+    /// <summary>遍历实际可视树，检查数据模板实例而非只检查未加载的 XAML 声明。</summary>
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var descendant in Descendants(child)) yield return descendant;
+        }
+    }
+
+    /// <summary>渲染真实 WPF 视图用于视觉验收；仅使用夹具，不启动监测器，也不访问真实数据库。</summary>
+    public static void ExportPreviews(string directory) => OnSta(() =>
+    {
+        Directory.CreateDirectory(directory);
+        using var files = new MemoryTests.TestDatabase();
+        files.Store.Initialize();
+        var start = new DateTimeOffset(2026, 10, 29, 9, 0, 0, TimeSpan.FromHours(8));
+        AppSession Session(string process, double minutes, double offset) => new(Guid.NewGuid(), process, process,
+            start.AddMinutes(offset), start.AddMinutes(offset + minutes), TimeSpan.FromMinutes(minutes));
+        files.Store.WriteBatch([new(null, Session("Code", 90, 0)), new(null, Session("Chrome", 40, 90)), new(null, Session("QQ", 20, 130))]);
+        var log = new DeveloperLogStore();
+        log.SetCurrentSession(new(Guid.NewGuid(), "Code", "Code", start.AddMinutes(150)));
+        log.SetPersistenceStatus("界面验收 · 演示数据 · 与真实用户历史隔离");
+        var pattern = InterestingnessTests.Candidate();
+        var evaluation = new DesktopNarrator.Analysis.InterestingnessEngine().EvaluateBatch([pattern], start, TimeSpan.Zero).Single();
+        log.AppendPattern(pattern, evaluation);
+        var window = HiddenWindow(log, new HistoryQueryService(files.Store));
+        try
+        {
+            window.Show();
+            ((DatePicker)window.FindName("HistoryDate")).SelectedDate = start.LocalDateTime.Date;
+            PumpUntil(() => window.Overview?.SessionCount == 3);
+            Capture("overview-dark.png");
+            window.Width = 900; window.Height = 640;
+            DrainDispatcher();
+            Capture("overview-compact.png");
+            window.Width = 1280; window.Height = 820;
+            ((TabItem)window.FindName("PatternsTab")).IsSelected = true;
+            ((DataGrid)window.FindName("PatternList")).SelectedIndex = 0;
+            DrainDispatcher();
+            Capture("observations-dark.png");
+        }
+        finally { window.Close(); }
+        DrainDispatcher();
+
+        void Capture(string name)
+        {
+            window.UpdateLayout();
+            var content = (FrameworkElement)window.Content;
+            var bitmap = new RenderTargetBitmap((int)Math.Ceiling(content.ActualWidth), (int)Math.Ceiling(content.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(content);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using var stream = File.Create(Path.Combine(directory, name));
+            encoder.Save(stream);
+        }
+    });
+
+    /// <summary>测试窗口不抢焦点、不显示在任务栏；渲染仍经过真实 WPF 布局与绑定。</summary>
+    private static DeveloperLogWindow HiddenWindow(DeveloperLogStore log, HistoryQueryService? queries = null) => new(log, queries)
+    {
+        ShowActivated = false, ShowInTaskbar = false, Opacity = 0,
+        WindowStartupLocation = WindowStartupLocation.Manual, Left = -10000, Top = -10000
+    };
 
     /// <summary>泵送 UI 消息直到异步条件满足，避免在 STA 上同步等待查询造成死锁。</summary>
     private static void PumpUntil(Func<bool> condition)

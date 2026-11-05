@@ -1,8 +1,19 @@
 using DesktopNarrator.Events;
+using System.IO;
 using DesktopNarrator.Monitor;
 
 // 隐藏原生进程夹具：只等待父测试关闭标准输入，不启动监测、数据库或界面。
 if (args.Contains("--process-fixture")) { Console.ReadLine(); return 0; }
+
+// 可选的视觉验收产物；独立夹具演示数据不会写入真实历史，路径由调用方明确给出。
+var previewIndex = Array.IndexOf(args, "--ui-preview");
+if (previewIndex >= 0)
+{
+    if (previewIndex + 1 >= args.Length) throw new ArgumentException("--ui-preview requires an output directory.");
+    DeveloperLogTests.ExportPreviews(Path.GetFullPath(args[previewIndex + 1]));
+    Console.WriteLine("WPF preview images exported.");
+    return 0;
+}
 
 // 无第三方测试框架的回归入口：既测试纯状态逻辑，也包含需要 Windows 桌面会话的原生/WPF 测试。
 var tests = new (string Name, Action Body)[]
@@ -83,7 +94,16 @@ var tests = new (string Name, Action Body)[]
     ("Memory upgrades v2 without fabricating historical scores", MemoryTests.EvaluationSchemaMigration),
     ("Memory preserves passed and filtered scoring snapshots", MemoryTests.EvaluationRoundTrip),
     ("Memory scoring and candidates commit atomically", MemoryTests.EvaluationAtomicity),
-    ("Log scoring pipeline reasons and decision view", DeveloperLogTests.ScoringPipelineAndView)
+    ("Log scoring pipeline reasons and decision view", DeveloperLogTests.ScoringPipelineAndView),
+    ("Presentation Chinese durations and invalid values", PresentationTests.Durations),
+    ("Presentation friendly names and cross-day ranges", PresentationTests.NamesAndRanges),
+    ("Presentation readable pattern facts preserve qualifications", PresentationTests.PatternFacts),
+    ("Presentation overview and percentages use full day", PresentationTests.SummaryAndShares),
+    ("Log overview distinguishes read failure from empty day", DeveloperLogTests.OverviewReadFailure),
+    ("Log overview refreshes submitted daily history", DeveloperLogTests.OverviewRefresh),
+    ("Presentation pie distribution preserves all durations", PresentationTests.PieDistribution),
+    ("Presentation pie geometry supports single and major sectors", PresentationTests.PieGeometry),
+    ("Log overview hides routine diagnostics and emphasizes time", DeveloperLogTests.CleanOverviewAndPie)
 };
 
 var failed = 0;
@@ -95,6 +115,7 @@ foreach (var test in tests)
     if (args.Contains("--analysis-only") && !test.Name.StartsWith("Pattern ", StringComparison.Ordinal)) continue;
     if (args.Contains("--process-only") && !test.Name.StartsWith("Process ", StringComparison.Ordinal)) continue;
     if (args.Contains("--scoring-only") && !test.Name.StartsWith("Scoring ", StringComparison.Ordinal)) continue;
+    if (args.Contains("--presentation-only") && !test.Name.StartsWith("Presentation ", StringComparison.Ordinal)) continue;
     try
     {
         test.Body();
